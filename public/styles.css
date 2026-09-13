@@ -104,6 +104,62 @@ header {
   gap: 24px;
 }
 
+.side {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.operator {
+  min-width: 140px;
+}
+
+.reading-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 12px;
+  background: #fff;
+}
+
+.reading-site {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.reading-site strong {
+  color: var(--ink);
+}
+
+.reading-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.reading-inputs .wide {
+  grid-column: 1 / -1;
+}
+
+.pending-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px dashed var(--warn);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  color: var(--warn);
+  background: rgba(163, 92, 0, .06);
+}
+
 h1 {
   margin: 0;
   font-size: clamp(28px, 4vw, 44px);
@@ -345,14 +401,20 @@ main {
   }
 
   .topline,
-  .card-head {
+  .card-head,
+  .side {
     flex-direction: column;
+  }
+
+  .side {
+    align-items: stretch;
   }
 
   .stats,
   .form-grid,
   .detail,
-  .toolbar {
+  .toolbar,
+  .reading-inputs {
     grid-template-columns: 1fr;
   }
 

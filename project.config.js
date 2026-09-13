@@ -6,19 +6,26 @@ module.exports = {
     '常规观察': 'ok',
     '正常': 'ok',
     '已复查': 'ok',
+    '已提交': 'ok',
+    '已完成': 'ok',
     '重点保护': 'warn',
+    '草稿': 'warn',
     '异常待复查': 'bad',
+    '待复核': 'bad',
     '暂停开放': 'bad'
   },
   collections: {
     sites: { label: '样点档案' },
-    surveys: { label: '巡测记录' }
+    surveys: { label: '巡测记录' },
+    batches: { label: '巡测批次' }
   },
   stats: [
     { label: '样点', collection: 'sites' },
     { label: '重点保护', collection: 'sites', filter: { field: 'protectedStatus', value: '重点保护' } },
     { label: '巡测记录', collection: 'surveys' },
-    { label: '待复查', collection: 'surveys', filter: { field: 'status', value: '异常待复查' } }
+    { label: '待复查', collection: 'surveys', filter: { field: 'status', value: '异常待复查' } },
+    { label: '巡测批次', collection: 'batches' },
+    { label: '批次待复核', collection: 'batches', filter: { field: 'status', value: '待复核' } }
   ],
   views: [
     {
@@ -27,6 +34,11 @@ module.exports = {
       type: 'dashboard',
       focusTitle: '异常与复查',
       focus: { collection: 'surveys', field: 'status', values: ['异常待复查'], limit: 8 }
+    },
+    {
+      id: 'batches',
+      label: '巡测批次',
+      type: 'batches'
     },
     {
       id: 'sites',
@@ -93,8 +105,38 @@ module.exports = {
     }
   ],
   actions: [
-    { id: 'site-normal', label: '常规观察', collection: 'sites', patches: [{ field: 'protectedStatus', value: '常规观察' }] },
-    { id: 'site-focus', label: '重点保护', collection: 'sites', patches: [{ field: 'protectedStatus', value: '重点保护' }] },
+    {
+      id: 'site-normal',
+      label: '常规观察',
+      collection: 'sites',
+      guards: [
+        {
+          op: 'noOpenReview',
+          collection: 'surveys',
+          foreignKey: 'siteId',
+          selfField: 'protectedStatus',
+          selfValue: '暂停开放',
+          message: '样点暂停开放且存在待复核记录，复核通过前不能降级'
+        }
+      ],
+      patches: [{ field: 'protectedStatus', value: '常规观察' }]
+    },
+    {
+      id: 'site-focus',
+      label: '重点保护',
+      collection: 'sites',
+      guards: [
+        {
+          op: 'noOpenReview',
+          collection: 'surveys',
+          foreignKey: 'siteId',
+          selfField: 'protectedStatus',
+          selfValue: '暂停开放',
+          message: '样点暂停开放且存在待复核记录，复核通过前不能降级'
+        }
+      ],
+      patches: [{ field: 'protectedStatus', value: '重点保护' }]
+    },
     { id: 'site-close', label: '暂停开放', collection: 'sites', danger: true, patches: [{ field: 'protectedStatus', value: '暂停开放' }] },
     {
       id: 'survey-alert',
@@ -106,6 +148,24 @@ module.exports = {
         { target: 'related', field: 'protectedStatus', value: '重点保护' }
       ]
     },
-    { id: 'survey-review', label: '完成复查', collection: 'surveys', patches: [{ field: 'status', value: '已复查' }, { field: 'reviewNote', value: '异常已复核' }] }
+    { id: 'survey-review', label: '完成复查', collection: 'surveys', patches: [{ field: 'status', value: '已复查' }, { field: 'reviewNote', value: '异常已复核' }] },
+    {
+      id: 'batch-complete',
+      label: '完成批次',
+      collection: 'batches',
+      guards: [
+        { op: 'notIn', left: 'item.status', values: ['草稿', '已完成'], message: '只有已提交或待复核的批次可以完成' },
+        {
+          op: 'noOpenReview',
+          collection: 'surveys',
+          foreignKey: 'batchId',
+          message: '批次内仍有待复核记录，复核通过前批次不能完成'
+        }
+      ],
+      patches: [
+        { field: 'status', value: '已完成' },
+        { field: 'completedAt', value: '$now' }
+      ]
+    }
   ]
 };
