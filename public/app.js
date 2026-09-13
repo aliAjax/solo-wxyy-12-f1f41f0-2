@@ -46,6 +46,8 @@ async function api(path, options = {}) {
     const error = new Error(body.error || '请求失败');
     error.status = res.status;
     error.conflict = Boolean(body.conflict);
+    error.code = body.code || '';
+    error.details = Array.isArray(body.details) ? body.details : [];
     throw error;
   }
   if (res.status === 204) return null;
@@ -254,6 +256,7 @@ function renderBatchesView(view) {
           <label class="wide">巡测人员<input id="batchSurveyor" required placeholder="当班巡测人员"></label>
         </div>
         <div id="batchReadings"></div>
+        <div class="form-error" id="batchError" hidden></div>
         <div class="actions">
           <button type="button" class="ghost" id="saveDraftBtn">暂存草稿</button>
           <button type="submit" id="submitBatchBtn">提交批次</button>
@@ -361,12 +364,30 @@ function resetBatchForm() {
   const form = $('#batchForm');
   if (!form) return;
   form.reset();
+  hideBatchError();
   $('#batchDate').value = todayLocal();
   $('#batchSurveyor').value = operator() === '系统' ? '' : operator();
   renderReadingRows();
 }
 
+function showBatchError(error) {
+  const box = $('#batchError');
+  if (!box) return;
+  const items = error.details?.length ? error.details : [{ message: error.message }];
+  box.innerHTML = `<strong>提交被拒绝：</strong><ul>${items.map((detail) => `<li>${escapeHtml(detail.message)}</li>`).join('')}</ul>`;
+  box.hidden = false;
+}
+
+function hideBatchError() {
+  const box = $('#batchError');
+  if (box) {
+    box.hidden = true;
+    box.innerHTML = '';
+  }
+}
+
 async function submitPayload(payload, { keepForm = false } = {}) {
+  hideBatchError();
   try {
     const result = await api('/api/batches/submit', { method: 'POST', body: JSON.stringify(payload) });
     removePending(payload.batchKey);
@@ -386,6 +407,7 @@ async function submitPayload(payload, { keepForm = false } = {}) {
       toast('连接不可用，已保存本地草稿，恢复连接后可补交');
       renderLocalPending();
     } else {
+      showBatchError(error);
       toast(error.message);
     }
     return false;

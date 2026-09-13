@@ -439,3 +439,117 @@ test('批次提交参数校验', async () => {
     await ctx.close();
   }
 });
+
+test('跨路线样点被识别并整体拒绝，不写入任何数据', async () => {
+  const ctx = await startServer(seedDb());
+  try {
+    // site-c 属于东线巡测，混入西线批次
+    const res = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({
+      readings: [
+        { siteId: 'site-a', temperature: 15.5, humidity: 93, co2: 640, dripRate: 10, disturbance: '' },
+        { siteId: 'site-c', temperature: 13.5, humidity: 86, co2: 580, dripRate: 6, disturbance: '' }
+      ]
+    }));
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'BATCH_VALIDATION');
+    const mismatch = res.body.details.find((d) => d.code === 'ROUTE_MISMATCH');
+    assert.ok(mismatch, '应返回可识别的跨路线错误');
+    assert.match(mismatch.message, /D-11/);
+    assert.match(mismatch.message, /西线巡测/);
+    // 整体拒绝：批次和巡测记录都不落库
+    assert.equal(ctx.readDb().batches.length, 0);
+    assert.equal(ctx.readDb().surveys.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('同一样点在一批中重复出现被拒绝', async () => {
+  const ctx = await startServer(seedDb());
+  try {
+    const res = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({
+      readings: [
+        { siteId: 'site-a', temperature: 15.5, humidity: 93, co2: 640, dripRate: 10, disturbance: '' },
+        { siteId: 'site-a', temperature: 15.9, humidity: 92, co2: 650, dripRate: 11, disturbance: '' }
+      ]
+    }));
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'BATCH_VALIDATION');
+    const dup = res.body.details.find((d) => d.code === 'DUPLICATE_SITE');
+    assert.ok(dup, '应返回可识别的重复样点错误');
+    assert.match(dup.message, /D-07/);
+    assert.match(dup.message, /第 1、2 条/);
+    assert.equal(ctx.readDb().batches.length, 0);
+    assert.equal(ctx.readDb().surveys.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('部分失败：一条合法读数不抵消非法读数，整批拒绝', async () => {
+  const ctx = await startServer(seedDb());
+  try {
+    const res = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({
+      readings: [
+        { siteId: 'site-a', temperature: 15.5, humidity: 93, co2: 640, dripRate: 10, disturbance: '' },
+        { siteId: 'site-b', temperature: 14.2, humidity: 90, co2: 600, dripRate: 8, disturbance: '' },
+        { siteId: 'site-c', temperature: 13.5, humidity: 86, co2: 580, dripRate: 6, disturbance: '' }
+      ]
+    }));
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'BATCH_VALIDATION');
+    // 合法的两条读数也不写入
+    assert.equal(ctx.readDb().batches.length, 0);
+    assert.equal(ctx.readDb().surveys.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('非法批次可暂存草稿但补交时被拒，合法批次与既有行为不受影响', async () => {
+  const ctx = await startServer(seedDb());
+  try {
+    // 含跨路线读数的草稿允许暂存（提交时才收紧边界）
+    const draft = await call(ctx.base, 'PUT', '/api/batches/draft/bk-mixed', batchPayload({
+      batchKey: 'bk-mixed',
+      readings: [
+        { siteId: 'site-a', temperature: 15.5, humidity: 93, co2: 640, dripRate: 10, disturbance: '' },
+        { siteId: 'site-c', temperature: 13.5, humidity: 86, co2: 580, dripRate: 6, disturbance: '' }
+      ]
+    }));
+    assert.equal(draft.status, 201);
+
+    // 补交时被边界拒绝，草稿保持草稿状态，不产生巡测记录
+    const res = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({
+      batchKey: 'bk-mixed',
+      readings: [
+        { siteId: 'site-a', temperature: 15.5, humidity: 93, co2: 640, dripRate: 10, disturbance: '' },
+        { siteId: 'site-c', temperature: 13.5, humidity: 86, co2: 580, dripRate: 6, disturbance: '' }
+      ]
+    }));
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'BATCH_VALIDATION');
+    let db = ctx.readDb();
+    assert.equal(db.batches.length, 1);
+    assert.equal(db.batches[0].status, '草稿');
+    assert.equal(db.surveys.length, 0);
+
+    // 修正为合法批次后正常提交
+    const fixed = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({ batchKey: 'bk-mixed' }));
+    assert.equal(fixed.status, 200);
+    assert.equal(fixed.body.status, '已提交');
+    db = ctx.readDb();
+    assert.equal(db.surveys.length, 2);
+
+    // 幂等重试与双终端冲突行为不变
+    const retry = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({ batchKey: 'bk-mixed' }));
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.deduplicated, true);
+    const other = await call(ctx.base, 'POST', '/api/batches/submit', batchPayload({ batchKey: 'bk-mixed', terminalId: 'term-B' }));
+    assert.equal(other.status, 409);
+    assert.equal(other.body.conflict, true);
+    assert.equal(ctx.readDb().surveys.length, 2);
+  } finally {
+    await ctx.close();
+  }
+});

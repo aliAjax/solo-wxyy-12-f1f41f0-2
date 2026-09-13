@@ -136,25 +136,39 @@ const READING_FIELDS = [
 ];
 
 function validateBatch(db, body) {
-  const errors = [];
-  if (!body.batchKey) errors.push('缺少批次标识');
-  if (!body.route) errors.push('请选择巡测路线');
-  if (!body.surveyor || !String(body.surveyor).trim()) errors.push('请填写巡测人员');
-  if (!body.shiftDate) errors.push('请填写班次日期');
+  const details = [];
+  if (!body.batchKey) details.push({ code: 'MISSING_FIELD', message: '缺少批次标识' });
+  if (!body.route) details.push({ code: 'MISSING_FIELD', message: '请选择巡测路线' });
+  if (!body.surveyor || !String(body.surveyor).trim()) details.push({ code: 'MISSING_FIELD', message: '请填写巡测人员' });
+  if (!body.shiftDate) details.push({ code: 'MISSING_FIELD', message: '请填写班次日期' });
   const readings = Array.isArray(body.readings) ? body.readings : [];
-  if (!readings.length) errors.push('批次至少包含一个样点读数');
+  if (!readings.length) details.push({ code: 'EMPTY_BATCH', message: '批次至少包含一个样点读数' });
+  const seen = new Map();
   readings.forEach((reading, index) => {
     const label = `第 ${index + 1} 条读数`;
     const site = db.sites.find((entry) => entry.id === reading.siteId);
     if (!site) {
-      errors.push(`${label}的样点不存在`);
+      details.push({ code: 'UNKNOWN_SITE', message: `${label}的样点不存在` });
       return;
     }
+    // 批次只接受所选路线下的样点
+    if (body.route && site.route !== body.route) {
+      details.push({ code: 'ROUTE_MISMATCH', message: `${label}（${site.pointCode}）不属于所选路线「${body.route}」` });
+    }
+    // 同一样点每批只能保有一份读数
+    if (seen.has(reading.siteId)) {
+      details.push({
+        code: 'DUPLICATE_SITE',
+        message: `样点 ${site.pointCode} 在批次中重复出现（第 ${seen.get(reading.siteId) + 1}、${index + 1} 条），每批每样点只能保有一份读数`
+      });
+    } else {
+      seen.set(reading.siteId, index);
+    }
     for (const [field, name] of READING_FIELDS) {
-      if (num(reading[field]) === null) errors.push(`${label}（${site.pointCode}）缺少有效${name}`);
+      if (num(reading[field]) === null) details.push({ code: 'INVALID_READING', message: `${label}（${site.pointCode}）缺少有效${name}` });
     }
   });
-  return errors;
+  return details;
 }
 
 function createApp(dbFile) {
@@ -244,8 +258,18 @@ function createApp(dbFile) {
             body: { error: '该批次已由另一终端提交，仅保留一份有效结果', conflict: true, batchId: existing.id }
           };
         }
-        const errors = validateBatch(db, body);
-        if (errors.length) return { status: 400, body: { error: errors.join('；') } };
+        // 校验失败整体拒绝：不写入任何批次和巡测数据
+        const details = validateBatch(db, body);
+        if (details.length) {
+          return {
+            status: 400,
+            body: {
+              error: details.map((detail) => detail.message).join('；'),
+              code: 'BATCH_VALIDATION',
+              details
+            }
+          };
+        }
         const now = new Date().toISOString();
         const by = body.by || body.surveyor || '系统';
         let flaggedCount = 0;
